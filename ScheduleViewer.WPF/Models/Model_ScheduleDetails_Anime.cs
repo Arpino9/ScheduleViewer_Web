@@ -80,8 +80,11 @@ public sealed class Model_ScheduleDetails_Anime : ModelBase<ViewModel_ScheduleDe
         {
             var elements = anime.Description.Split('\n');
 
-            var searchTitle = anime.Title.Split(' ')[0].ToString().Replace('_', ' ');
-            var results = await AnnictReader.FetchAsync(searchTitle);
+            //var searchTitle = anime.Title.Split(' ')[0].ToString().Replace('_', ' ');
+
+            var results = await AnnictReader.FetchAsync(anime.Title.Split(' ')[0]);
+
+            var resultss = await AnnictReader.FetchAsync("遊☆戯☆王");
 
             bool isFound = false;
             foreach (var annic in results)
