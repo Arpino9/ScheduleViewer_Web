@@ -16,7 +16,7 @@ server:
 scheduleviewer:
   database-path: ${SQLITE_DB_PATH:C:/Users/okaji/source/repos/ScheduleViewer/ScheduleViewer.Infrastructure/ScheduleViewer.db}
   google:
-    api-key:            ${GOOGLE_API_KEY:}
+    api-key:            ${GOOGLE_API_KEY:} 
     client-secret-path: ${GOOGLE_CLIENT_SECRET_PATH:C:/Users/okaji/source/repos/ScheduleViewer/ScheduleViewer.Infrastructure/client_secret_732519433057-69j4ur5vdpca55vfscem296gesd5j16o.apps.googleusercontent.com.json}
     drive-folder-id:    ${GOOGLE_DRIVE_FOLDER_ID:1sE_XnrJk3U9ZSq9hHUPNgOqPYpmbwXwS}
     calendar-id:        ${GOOGLE_CALENDAR_ID:okajima100@gmail.com}
