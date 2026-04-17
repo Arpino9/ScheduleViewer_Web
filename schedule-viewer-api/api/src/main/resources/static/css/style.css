@@ -78,10 +78,18 @@ body { font-family: 'Segoe UI', 'Yu Gothic UI', sans-serif; font-size: 13px;
 #detail-header {
   padding: 14px 20px; background: #fff;
   border-bottom: 1px solid #e0e4ea;
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
 }
 #detail-date {
   font-size: 18px; font-weight: 600; color: #1e2a3a;
 }
+#detail-weather {
+  font-size: 14px; color: #445;
+  display: inline-flex; align-items: center; gap: 4px;
+}
+#detail-weather .wx-icon { font-size: 18px; line-height: 1; }
+#detail-weather .wx-temp { font-size: 12px; color: #667; }
+#detail-weather .wx-loading { font-size: 12px; color: #99a; }
 
 /* ===== タブ ===== */
 #tabs {
@@ -203,6 +211,26 @@ body { font-family: 'Segoe UI', 'Yu Gothic UI', sans-serif; font-size: 13px;
   background: rgba(0,0,0,.5); color: #fff; font-size: 10px;
   padding: 3px 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+.gphoto-list {
+  display: flex; flex-direction: column; gap: 8px;
+}
+.gphoto-link-card {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  align-items: center; gap: 10px;
+  padding: 12px 14px; border-radius: 8px;
+  background: #f0f4ff; border: 1px solid #c5d3f0;
+  text-decoration: none; color: inherit;
+  transition: background .15s;
+}
+.gphoto-link-card:hover { background: #dde6ff; }
+.gphoto-icon { font-size: 20px; }
+.gphoto-label { font-size: 13px; font-weight: 600; color: #333; white-space: nowrap; }
+.gphoto-url {
+  font-size: 11px; color: #1a73e8;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.gphoto-arrow { font-size: 14px; color: #888; }
 
 /* ===== 本ペイン (サムネイル) ===== */
 .book-detail-thumb {
@@ -297,6 +325,61 @@ body { font-family: 'Segoe UI', 'Yu Gothic UI', sans-serif; font-size: 13px;
 }
 .section-title:first-child { margin-top: 0; }
 
+/* ===== アニメ視聴登録ボタン ===== */
+.anime-reg-btn { margin-bottom: 6px; background: #6a3fa0; }
+.anime-reg-btn:hover { background: #8b5cc0; }
+
+/* ===== アニメ視聴登録モーダル ===== */
+#anime-reg-overlay {
+  display: none; position: fixed; inset: 0;
+  background: rgba(0,0,0,.55); z-index: 200;
+  align-items: center; justify-content: center;
+}
+#anime-reg-overlay.open { display: flex; }
+#anime-reg-modal {
+  background: #fff; border-radius: 12px; width: 460px; max-width: 94vw;
+  box-shadow: 0 8px 32px rgba(0,0,0,.3);
+  max-height: 92vh; display: flex; flex-direction: column;
+}
+#anime-reg-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 18px; background: #1e2a3a; color: #fff;
+  font-weight: 600; font-size: 14px;
+  border-radius: 12px 12px 0 0; flex-shrink: 0;
+}
+#anime-reg-header button {
+  background: none; border: none; color: #fff; font-size: 18px; cursor: pointer;
+}
+#anime-reg-body { padding: 18px; overflow-y: auto; }
+.reg-field { margin-bottom: 13px; }
+.reg-field label {
+  display: block; font-size: 12px; font-weight: 600;
+  color: #556; margin-bottom: 4px;
+}
+.reg-field input, .reg-field textarea {
+  width: 100%; padding: 8px 10px;
+  border: 1px solid #d0d7e3; border-radius: 6px;
+  font-size: 13px; font-family: inherit; outline: none;
+  transition: border-color .15s, box-shadow .15s;
+  color: #1e2a3a;
+}
+.reg-field input:focus, .reg-field textarea:focus {
+  border-color: #1a6fb3;
+  box-shadow: 0 0 0 2px rgba(26,111,179,.12);
+}
+.reg-field textarea { resize: vertical; }
+.reg-actions { display: flex; gap: 8px; margin-top: 16px; }
+.reg-actions button {
+  flex: 1; padding: 10px; border: none; border-radius: 8px;
+  cursor: pointer; font-size: 13px; font-weight: 600;
+  transition: background .15s;
+}
+.reg-actions button[type="submit"] { background: #6a3fa0; color: #fff; }
+.reg-actions button[type="submit"]:hover { background: #8b5cc0; }
+.reg-actions button[type="submit"]:disabled { background: #999; cursor: default; }
+.reg-actions button[type="button"] { background: #f0f2f5; color: #445; }
+.reg-actions button[type="button"]:hover { background: #e0e4ea; }
+
 /* ===== 認証ボタン (サイドバー) ===== */
 .auth-btn { margin-top: 6px; background: #2a4a6a; }
 .auth-btn:hover { background: #3a6a9a; }
@@ -354,6 +437,78 @@ body { font-family: 'Segoe UI', 'Yu Gothic UI', sans-serif; font-size: 13px;
 .auth-action-btn:hover { background: #2a8de0; }
 .auth-action-btn.secondary { background: #667; }
 .auth-action-btn.secondary:hover { background: #445; }
+
+/* ===== 検索バー ===== */
+#search-bar {
+  padding: 8px 16px;
+  background: #f5f7fa;
+  border-bottom: 1px solid #e0e4ea;
+}
+#search-wrap { position: relative; }
+#search-input {
+  width: 100%; padding: 8px 12px;
+  border: 1px solid #d0d7e3; border-radius: 6px;
+  font-size: 13px; outline: none;
+  background: #fff; color: #1e2a3a;
+  transition: border-color .15s, box-shadow .15s;
+}
+#search-input:focus {
+  border-color: #1a6fb3;
+  box-shadow: 0 0 0 2px rgba(26,111,179,.15);
+}
+#search-dropdown {
+  display: none;
+  position: absolute; top: calc(100% + 4px); left: 0; right: 0;
+  background: #fff; border: 1px solid #d0d7e3;
+  border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,.12);
+  z-index: 50; overflow: hidden;
+}
+#search-dropdown.open { display: block; }
+.search-item {
+  padding: 10px 14px; cursor: pointer;
+  border-bottom: 1px solid #f0f2f5;
+}
+.search-item:last-child { border-bottom: none; }
+.search-item:hover, .search-item.active { background: #f0f6ff; }
+.search-item-title { font-weight: 600; color: #1e2a3a; font-size: 13px; }
+.search-item-meta { font-size: 11px; color: #888; margin-top: 2px; }
+.search-no-result {
+  padding: 12px 14px; color: #aaa; font-size: 13px; text-align: center;
+}
+
+/* ===== イベント詳細モーダル ===== */
+#event-modal-overlay {
+  display: none; position: fixed; inset: 0;
+  background: rgba(0,0,0,.6); z-index: 150;
+  align-items: center; justify-content: center;
+}
+#event-modal-overlay.open { display: flex; }
+#event-modal {
+  background: #fff; border-radius: 12px; width: 520px; max-width: 92vw;
+  box-shadow: 0 8px 32px rgba(0,0,0,.3); overflow: hidden;
+  max-height: 80vh; display: flex; flex-direction: column;
+}
+#event-modal-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 18px; background: #1e2a3a; color: #fff;
+  font-weight: 600; font-size: 15px; flex-shrink: 0;
+}
+#event-modal-title {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;
+}
+#event-modal-header button {
+  background: none; border: none; color: #fff; font-size: 20px;
+  cursor: pointer; margin-left: 12px; flex-shrink: 0; line-height: 1;
+}
+#event-modal-body { padding: 20px; overflow-y: auto; }
+.event-modal-table { border-collapse: collapse; font-size: 13px; width: 100%; }
+.event-modal-table th {
+  width: 60px; text-align: right; padding: 7px 14px 7px 0;
+  font-weight: 600; color: #556; vertical-align: top; white-space: nowrap;
+}
+.event-modal-table td {
+  padding: 7px 0; color: #1e2a3a; word-break: break-word; line-height: 1.6;
+}
 
 /* ===== スクロールバー ===== */
 ::-webkit-scrollbar { width: 6px; }
