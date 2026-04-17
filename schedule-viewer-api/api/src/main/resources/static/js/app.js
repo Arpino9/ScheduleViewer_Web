@@ -27,6 +27,14 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   document.getElementById('modal-overlay').addEventListener('click', closeModal);
+  document.getElementById('event-modal-overlay').addEventListener('click', e => {
+    if (e.target === document.getElementById('event-modal-overlay')) closeEventModal();
+  });
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') closeEventModal();
+  });
+
+  initSearch();
 });
 
 // ===== カレンダー描画 =====
@@ -87,9 +95,97 @@ function makeDayCell(y, m, d, otherMonth) {
     const normalY = (m > 12) ? y + 1 : (m < 1) ? y - 1 : y;
     const normalM = ((m - 1 + 12) % 12) + 1;
     const ds = `${normalY}-${String(normalM).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    cell.dataset.date = ds;
     cell.addEventListener('click', () => selectDate(ds, cell));
   }
   return cell;
+}
+
+// ===== 天気取得 (Open-Meteo / 愛知県一宮市) =====
+const WEATHER_LAT  = 35.3033;
+const WEATHER_LON  = 136.8008;
+const WEATHER_TZ   = 'Asia%2FTokyo';
+
+const WMO_CODE = {
+  0: ['☀️','快晴'],
+  1: ['🌤️','おおむね晴れ'],
+  2: ['⛅','一部曇り'],
+  3: ['☁️','曇り'],
+  45: ['🌫️','霧'],
+  48: ['🌫️','着氷霧'],
+  51: ['🌦️','霧雨（弱）'],
+  53: ['🌦️','霧雨'],
+  55: ['🌦️','霧雨（強）'],
+  56: ['🌦️','着氷霧雨'],
+  57: ['🌦️','着氷霧雨（強）'],
+  61: ['🌧️','小雨'],
+  63: ['🌧️','雨'],
+  65: ['🌧️','大雨'],
+  66: ['🌧️','着氷雨'],
+  67: ['🌧️','着氷雨（強）'],
+  71: ['🌨️','小雪'],
+  73: ['🌨️','雪'],
+  75: ['🌨️','大雪'],
+  77: ['🌨️','霧雪'],
+  80: ['🌦️','にわか雨（弱）'],
+  81: ['🌦️','にわか雨'],
+  82: ['🌦️','にわか雨（強）'],
+  85: ['🌨️','にわか雪'],
+  86: ['🌨️','にわか大雪'],
+  95: ['⛈️','雷雨'],
+  96: ['⛈️','雷雨（ひょう）'],
+  99: ['⛈️','激しい雷雨'],
+};
+
+async function fetchWeather(dateStr) {
+  const el = document.getElementById('detail-weather');
+  el.innerHTML = '<span class="wx-loading">天気取得中...</span>';
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const target = new Date(dateStr + 'T00:00:00');
+
+  let url;
+  if (target <= today) {
+    // 過去・当日 → アーカイブ API
+    url = `https://archive-api.open-meteo.com/v1/archive` +
+          `?latitude=${WEATHER_LAT}&longitude=${WEATHER_LON}` +
+          `&start_date=${dateStr}&end_date=${dateStr}` +
+          `&daily=weather_code,temperature_2m_max,temperature_2m_min` +
+          `&timezone=${WEATHER_TZ}`;
+  } else {
+    // 未来 → 予報 API
+    url = `https://api.open-meteo.com/v1/forecast` +
+          `?latitude=${WEATHER_LAT}&longitude=${WEATHER_LON}` +
+          `&daily=weather_code,temperature_2m_max,temperature_2m_min` +
+          `&timezone=${WEATHER_TZ}` +
+          `&start_date=${dateStr}&end_date=${dateStr}`;
+  }
+
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    const daily = data.daily;
+    if (!daily || !daily.weather_code || daily.weather_code.length === 0) {
+      el.innerHTML = '';
+      return;
+    }
+    const code = daily.weather_code[0];
+    const tMax  = daily.temperature_2m_max[0];
+    const tMin  = daily.temperature_2m_min[0];
+    const [icon, label] = WMO_CODE[code] ?? ['🌡️', `コード${code}`];
+    const tempHtml = (tMax != null && tMin != null)
+      ? `<span class="wx-temp">${Math.round(tMax)}° / ${Math.round(tMin)}°</span>`
+      : '';
+    el.innerHTML =
+      `<span class="wx-icon" title="${label}">${icon}</span>` +
+      `<span class="wx-label">${label}</span>` +
+      tempHtml;
+  } catch (e) {
+    console.warn('天気取得失敗:', e);
+    el.innerHTML = '';
+  }
 }
 
 // ===== 日付選択 =====
@@ -104,6 +200,7 @@ function selectDate(dateStr, cell) {
   document.getElementById('detail-date').textContent =
     `${d.getFullYear()}年${d.getMonth()+1}月${d.getDate()}日 (${dows[d.getDay()]})`;
 
+  fetchWeather(dateStr);
   loadTab(state.activeTab);
 }
 
@@ -129,8 +226,7 @@ function loadTab(tab) {
     case 'tasks':       loadTasks(ds, pane);       break;
     case 'health':      loadHealth(ds, pane);      break;
     case 'books':       loadBooks(ds, pane);       break;
-    case 'expenditure': loadExpenditure(ds, pane); break;
-    case 'photos':      loadPhotos(ds, pane);      break;
+
     case 'anime':       loadAnime(ds, pane);       break;
   }
 }
@@ -158,9 +254,12 @@ function setEmpty(pane, msg = 'データがありません') {
 // ===== スケジュールタブ =====
 async function loadSchedule(ds, pane) {
   setLoading(pane);
-  const events = await apiFetch(`/api/calendar?date=${ds}`);
+  const [events, localPhotos, expenditureItems] = await Promise.all([
+    apiFetch(`/api/calendar?date=${ds}`),
+    apiFetch(`/api/photos/local/date/${ds}`),
+    apiFetch(`/api/drive/expenditure/date/${ds}`)
+  ]);
   if (!events) { setEmpty(pane, 'カレンダーデータの取得に失敗しました'); return; }
-  if (events.length === 0) { setEmpty(pane, 'この日のスケジュールはありません'); return; }
 
   const allDay = events.filter(e => (e.allDay || e.allDayEvent) && !e.program && !e.book);
   const timed  = events.filter(e => !e.allDay && !e.allDayEvent && !e.program && !e.book);
@@ -174,20 +273,102 @@ async function loadSchedule(ds, pane) {
     html += '<div class="section-title">時間指定</div>';
     timed.forEach(e => { html += renderEventCard(e); });
   }
+  if (!allDay.length && !timed.length) {
+    html += '<div class="empty">この日のスケジュールはありません</div>';
+  }
+
+  // 写真セクション
+  const calPhotoUrls = extractPhotoUrls(events);
+  const hasLocal = localPhotos && localPhotos.length > 0;
+  const hasCal   = calPhotoUrls.length > 0;
+  if (hasLocal || hasCal) {
+    html += '<div class="section-title">写真</div>';
+    if (hasLocal) {
+      html += '<div class="photo-grid">' +
+        localPhotos.map(p => `
+          <div class="photo-card" onclick="openModal('${esc(p.url || '')}')">
+            ${p.url
+              ? `<img src="${esc(p.url)}" alt="${esc(p.fileName || '')}" loading="lazy">`
+              : `<div class="photo-no-img">🖼️<span>${esc(p.fileName || 'No image')}</span></div>`}
+            <div class="photo-name">${esc(p.fileName || '')}</div>
+          </div>`).join('') +
+        '</div>';
+    }
+    if (hasCal) {
+      html += '<div class="gphoto-list">' +
+        calPhotoUrls.map(item => `
+          <a class="gphoto-link-card" href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">
+            <span class="gphoto-icon">📷</span>
+            <span class="gphoto-label">${esc(item.title)}</span>
+            <span class="gphoto-url">${esc(item.url)}</span>
+            <span class="gphoto-arrow">↗</span>
+          </a>`).join('') +
+        '</div>';
+    }
+  }
+
+  // 添付ファイルセクション
+  const allAttachments = events.flatMap(e => (e.attachments || []).map(a => ({
+    title:    a.title    || '',
+    url:      a.url      || '',
+    mimeType: a.mimeType || '',
+    eventTitle: e.title  || ''
+  })));
+  if (allAttachments.length > 0) {
+    html += '<div class="section-title">添付ファイル</div>';
+    html += '<div class="gphoto-list">' +
+      allAttachments.map(a => `
+        <a class="gphoto-link-card" href="${esc(a.url)}" target="_blank" rel="noopener noreferrer">
+          <span class="gphoto-icon">${attachmentIcon(a.mimeType)}</span>
+          <span class="gphoto-label">${esc(a.title || a.eventTitle)}</span>
+          <span class="gphoto-url">${esc(a.url)}</span>
+          <span class="gphoto-arrow">↗</span>
+        </a>`).join('') +
+      '</div>';
+  }
+
+  // 収支セクション
+  if (expenditureItems && expenditureItems.length > 0) {
+    const total = expenditureItems.reduce((sum, i) => sum + (i.price || 0), 0);
+    html += '<div class="section-title">収支</div>';
+    html += `
+      <table class="exp-table">
+        <thead>
+          <tr>
+            <th>内容</th><th>大項目</th><th>中項目</th>
+            <th>金融機関</th><th style="text-align:right">金額</th>
+            <th>メモ</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${expenditureItems.map(i => `
+            <tr>
+              <td>${esc(i.itemName || '')}</td>
+              <td>${esc(i.categoryLarge || '')}</td>
+              <td>${esc(i.categoryMiddle || '')}</td>
+              <td>${esc(i.financialInstitutions || '')}</td>
+              <td class="exp-amount">${(i.price || 0).toLocaleString()} 円</td>
+              <td>${esc(i.memo || '')}</td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+      <div class="exp-total">合計: ${total.toLocaleString()} 円</div>`;
+  }
+
   pane.innerHTML = html;
 }
 
 function renderEventCard(e) {
   const cls = e.book ? 'book' : e.program ? 'program' : e.allDay ? 'all-day' : '';
-  const start = e.startDate ? formatTime(e.startDate) : '';
-  const end   = e.endDate   ? formatTime(e.endDate)   : '';
+  const start = (!e.allDay && !e.allDayEvent && e.startDate) ? formatTime(e.startDate) : '';
+  const end   = (!e.allDay && !e.allDayEvent && e.endDate)   ? formatTime(e.endDate)   : '';
   const time  = start ? `${start}${end ? ' ～ ' + end : ''}` : '終日';
   return `
     <div class="event-card ${cls}">
       <div class="event-time">${esc(time)}</div>
       <div class="event-title">${esc(e.title || e.displayTitle || '')}</div>
       ${e.place ? `<div class="event-place">📍 ${esc(e.place)}</div>` : ''}
-      ${e.description ? `<div class="event-desc">${esc(e.description)}</div>` : ''}
+      ${e.description ? `<div class="event-desc">${descToSafeHtml(e.description)}</div>` : ''}
     </div>`;
 }
 
@@ -284,7 +465,7 @@ function parseBookDesc(desc) {
     if (key === '発売日') result['発売日'] = val;
     else if (key === 'ISBN-10') result['ISBN-10'] = val;
     else if (key === 'ISBN-13') result['ISBN-13'] = val;
-    else if (bookTypeRe.test(key)) result['本の種類'] = val;
+    else if (bookTypeRe.test(key)) result['本の種類'] = key;
   }
 
   // 【本の概要】〜【本の評価】間の複数行テキスト
@@ -382,55 +563,54 @@ function renderBookDetail(detail, book, title, desc) {
     </div>`;
 }
 
-// ===== 収支タブ =====
-async function loadExpenditure(ds, pane) {
-  setLoading(pane);
-  const items = await apiFetch(`/api/drive/expenditure/date/${ds}`);
-  if (!items) { setEmpty(pane, '収支データの取得に失敗しました'); return; }
-  if (items.length === 0) { setEmpty(pane, 'この日の収支記録はありません'); return; }
-
-  const total = items.reduce((sum, i) => sum + (i.price || 0), 0);
-
-  pane.innerHTML = `
-    <table class="exp-table">
-      <thead>
-        <tr>
-          <th>内容</th><th>大項目</th><th>中項目</th>
-          <th>金融機関</th><th style="text-align:right">金額</th>
-          <th>メモ</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${items.map(i => `
-          <tr>
-            <td>${esc(i.itemName || '')}</td>
-            <td>${esc(i.categoryLarge || '')}</td>
-            <td>${esc(i.categoryMiddle || '')}</td>
-            <td>${esc(i.financialInstitutions || '')}</td>
-            <td class="exp-amount">${(i.price || 0).toLocaleString()} 円</td>
-            <td>${esc(i.memo || '')}</td>
-          </tr>`).join('')}
-      </tbody>
-    </table>
-    <div class="exp-total">合計: ${total.toLocaleString()} 円</div>`;
-}
-
-// ===== 写真タブ =====
-async function loadPhotos(ds, pane) {
-  setLoading(pane);
-  const photos = await apiFetch(`/api/photos/date/${ds}`);
-  if (!photos) { setEmpty(pane, '写真データの取得に失敗しました'); return; }
-  if (photos.length === 0) { setEmpty(pane, 'この日の写真はありません'); return; }
-
-  pane.innerHTML = `<div class="photo-grid">` +
-    photos.map(p => `
-      <div class="photo-card" onclick="openModal('${esc(p.url || '')}')">
-        ${p.url
-          ? `<img src="${esc(p.url)}" alt="${esc(p.fileName || '')}" loading="lazy">`
-          : `<div class="photo-no-img">🖼️<span>${esc(p.fileName || 'No image')}</span></div>`}
-        <div class="photo-name">${esc(p.fileName || '')}</div>
-      </div>`).join('') +
-    `</div>`;
+/**
+ * カレンダーイベントの説明欄から【写真】URLを抽出する
+ * 対応フォーマット:
+ *   【写真】\nhttps://...           (URLが次の行)
+ *   【写真】https://...             (URLが同じ行)
+ *   【写真】<br><a href="url">...</a>  (<br>区切り + <a>タグ)
+ * @returns {{url: string, title: string}[]}
+ */
+function extractPhotoUrls(events) {
+  const results = [];
+  const seen = new Set();
+  for (const e of events) {
+    if (!e.description) continue;
+    // <br> を \n に正規化してから行分割
+    const normalized = e.description.replace(/<br\s*\/?>/gi, '\n');
+    const lines = normalized.split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      const m = lines[i].match(/^【写真】(.*)/);
+      if (!m) continue;
+      let inline = m[1].trim();
+      // <a href="url"> からURL抽出
+      const aMatch = inline.match(/href="([^"]+)"/);
+      if (aMatch) {
+        if (!seen.has(aMatch[1])) { seen.add(aMatch[1]); results.push({ url: aMatch[1], title: e.title || '' }); }
+        continue;
+      }
+      if (inline.startsWith('http')) {
+        if (!seen.has(inline)) { seen.add(inline); results.push({ url: inline, title: e.title || '' }); }
+        continue;
+      }
+      // 次の行以降にURLが続く限り全て取得
+      let j = i + 1;
+      while (j < lines.length) {
+        const nextLine = lines[j].trim();
+        const nextAMatch = nextLine.match(/href="([^"]+)"/);
+        if (nextAMatch) {
+          if (!seen.has(nextAMatch[1])) { seen.add(nextAMatch[1]); results.push({ url: nextAMatch[1], title: e.title || '' }); }
+          j++;
+        } else if (nextLine.startsWith('http')) {
+          if (!seen.has(nextLine)) { seen.add(nextLine); results.push({ url: nextLine, title: e.title || '' }); }
+          j++;
+        } else {
+          break;
+        }
+      }
+    }
+  }
+  return results;
 }
 
 // ===== アニメタブ =====
@@ -444,13 +624,25 @@ function parseAnimeDesc(desc) {
   if (!desc) return {};
   const result = {};
   const lines = desc.split('\n');
-  for (let i = 0; i < lines.length; i++) {
-    const m = lines[i].match(/^【([^】]+)】(.*)/);
+  let currentKey = null;
+  let currentLines = [];
+
+  const flush = () => {
+    if (currentKey) result[currentKey] = currentLines.join('\n').trim();
+  };
+
+  for (const line of lines) {
+    const m = line.match(/^【([^】]+)】(.*)/);
     if (m) {
+      flush();
+      currentKey = m[1].trim();
       const inlineVal = m[2].trim();
-      result[m[1].trim()] = inlineVal !== '' ? inlineVal : (lines[i + 1] || '').trim();
+      currentLines = inlineVal ? [inlineVal] : [];
+    } else if (currentKey) {
+      currentLines.push(line);
     }
   }
+  flush();
   return result;
 }
 
@@ -534,11 +726,10 @@ async function selectAnimeRow(row, idx) {
   // まずカレンダー情報だけ表示
   renderAnimeDetail(detail, null, calTitle, desc, null, '', part);
 
-  // Annict + スプレッドシート (サムネイル・概要・各話サムネイル) を並列取得
-  const [animes, thumbData, captionData, episodeThumbData] = await Promise.all([
+  // Annict + スプレッドシート (サムネイル・各話サムネイル) を並列取得
+  const [animes, thumbData, episodeThumbData] = await Promise.all([
     apiFetch(`/api/anime?title=${encodeURIComponent(searchWord)}&first=5&castFirst=10`),
     apiFetch(`/api/spreadsheet/thumbnail?title=${encodeURIComponent(matchTitle)}`),
-    apiFetch(`/api/spreadsheet/caption?title=${encodeURIComponent(calTitle)}`),
     apiFetch(`/api/spreadsheet/episode-thumbnail?title=${encodeURIComponent(calTitle)}`)
   ]);
 
@@ -553,7 +744,7 @@ async function selectAnimeRow(row, idx) {
   const thumbnail = (thumbData && thumbData.url) ? thumbData.url
                   : (a && a.thumbnail)           ? a.thumbnail
                   : null;
-  const caption = (captionData && captionData.caption) ? captionData.caption : '';
+  const caption = desc['概要'] || '';
   const episodeThumbnail = (episodeThumbData && episodeThumbData.url) ? episodeThumbData.url : null;
   renderAnimeDetail(detail, a, a ? a.title : calTitle, desc, thumbnail, caption, part, episodeThumbnail);
 }
@@ -700,6 +891,18 @@ function closeModal() {
 }
 
 // ===== ユーティリティ =====
+
+function attachmentIcon(mimeType) {
+  if (!mimeType) return '📎';
+  if (mimeType.includes('pdf'))   return '📄';
+  if (mimeType.includes('image')) return '🖼️';
+  if (mimeType.includes('video')) return '🎬';
+  if (mimeType.includes('audio')) return '🎵';
+  if (mimeType.includes('spreadsheet') || mimeType.includes('excel')) return '📊';
+  if (mimeType.includes('presentation') || mimeType.includes('powerpoint')) return '📽️';
+  if (mimeType.includes('document') || mimeType.includes('word')) return '📝';
+  return '📎';
+}
 function toDateStr(d) {
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 }
@@ -724,4 +927,220 @@ function esc(str) {
   return String(str)
     .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
     .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+// ===== アニメ視聴登録 =====
+
+function showAnimeRegModal() {
+  document.getElementById('reg-date').value = toDateStr(new Date());
+  document.getElementById('anime-reg-overlay').classList.add('open');
+  document.getElementById('reg-title').focus();
+}
+
+function hideAnimeRegModal() {
+  document.getElementById('anime-reg-overlay').classList.remove('open');
+  document.getElementById('anime-reg-form').reset();
+  document.getElementById('reg-service').value = 'dアニメストア';
+  const btn = document.getElementById('reg-submit-btn');
+  btn.disabled = false;
+  btn.textContent = '登録する';
+}
+
+async function submitAnimeReg(e) {
+  e.preventDefault();
+  const btn = document.getElementById('reg-submit-btn');
+  btn.disabled = true;
+  btn.textContent = '登録中...';
+
+  const body = {
+    date:     document.getElementById('reg-date').value,
+    title:    document.getElementById('reg-title').value.trim(),
+    episode:  parseInt(document.getElementById('reg-episode').value, 10),
+    subtitle: document.getElementById('reg-subtitle').value.trim(),
+    service:  document.getElementById('reg-service').value.trim(),
+    summary:  document.getElementById('reg-summary').value.trim()
+  };
+
+  try {
+    const res  = await fetch('/api/anime/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const data = res.ok ? await res.json() : null;
+
+    if (data && data.status === 'ok') {
+      alert(data.message);
+      hideAnimeRegModal();
+      // 登録日が現在選択中の日付なら再読み込み
+      if (state.selectedDate === body.date) loadTab('schedule');
+    } else {
+      alert('登録に失敗しました: ' + (data ? data.message : 'サーバーエラー'));
+      btn.disabled = false;
+      btn.textContent = '登録する';
+    }
+  } catch (err) {
+    alert('通信エラーが発生しました: ' + err.message);
+    btn.disabled = false;
+    btn.textContent = '登録する';
+  }
+}
+
+// ===== 検索 =====
+
+let _searchTimer = null;
+let _searchResults = [];
+let _searchIdx = -1;
+
+function initSearch() {
+  const input    = document.getElementById('search-input');
+  const dropdown = document.getElementById('search-dropdown');
+
+  input.addEventListener('input', () => {
+    clearTimeout(_searchTimer);
+    const q = input.value.trim();
+    if (q.length < 2) { closeSearchDropdown(); return; }
+    _searchTimer = setTimeout(() => performSearch(q), 300);
+  });
+
+  input.addEventListener('keydown', e => {
+    if (!dropdown.classList.contains('open')) return;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      _searchIdx = Math.min(_searchIdx + 1, _searchResults.length - 1);
+      highlightSearchItem();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      _searchIdx = Math.max(_searchIdx - 1, 0);
+      highlightSearchItem();
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (_searchIdx >= 0 && _searchResults[_searchIdx]) {
+        openEventModal(_searchResults[_searchIdx]);
+      }
+    } else if (e.key === 'Escape') {
+      closeSearchDropdown();
+      input.blur();
+    }
+  });
+
+  document.addEventListener('click', e => {
+    if (!e.target.closest('#search-wrap')) closeSearchDropdown();
+  });
+}
+
+async function performSearch(q) {
+  const data = await apiFetch(`/api/calendar/search?q=${encodeURIComponent(q)}`);
+  _searchResults = data || [];
+  _searchIdx = -1;
+  renderSearchDropdown();
+}
+
+function renderSearchDropdown() {
+  const dropdown = document.getElementById('search-dropdown');
+  if (_searchResults.length === 0) {
+    dropdown.innerHTML = '<div class="search-no-result">該当する予定はありません</div>';
+  } else {
+    dropdown.innerHTML = _searchResults.map((e, i) => {
+      const isAllDay = e.allDay || e.allDayEvent;
+      let meta = '';
+      if (!isAllDay && e.startDate) {
+        const d   = new Date(e.startDate);
+        const ymd = `${d.getFullYear()}/${d.getMonth()+1}/${d.getDate()}`;
+        const hm  = formatTime(e.startDate);
+        const parts = [ymd, hm];
+        if (e.place) parts.push(e.place);
+        meta = parts.filter(Boolean).join(' / ');
+      }
+      return `<div class="search-item" data-idx="${i}" onclick="onSearchItemClick(${i})">
+        <div class="search-item-title">${esc(e.title || e.displayTitle || '')}</div>
+        ${meta ? `<div class="search-item-meta">${esc(meta)}</div>` : ''}
+      </div>`;
+    }).join('');
+  }
+  dropdown.classList.add('open');
+}
+
+function highlightSearchItem() {
+  document.querySelectorAll('.search-item').forEach((el, i) => {
+    el.classList.toggle('active', i === _searchIdx);
+  });
+}
+
+function closeSearchDropdown() {
+  document.getElementById('search-dropdown').classList.remove('open');
+  _searchResults = [];
+  _searchIdx = -1;
+}
+
+function onSearchItemClick(idx) {
+  const event = _searchResults[idx];
+  if (!event) return;
+  navigateToEvent(event);
+  closeSearchDropdown();
+  document.getElementById('search-input').value = '';
+}
+
+function navigateToEvent(event) {
+  const dateStr = event.startDate ? event.startDate.slice(0, 10) : null;
+  if (!dateStr) return;
+  const [y, m] = dateStr.split('-').map(Number);
+  state.year  = y;
+  state.month = m;
+  renderCalendar();
+  const cell = document.querySelector(`.day-cell[data-date="${dateStr}"]`);
+  if (cell) selectDate(dateStr, cell);
+}
+
+// ===== イベント詳細モーダル =====
+
+function openEventModal(event) {
+  navigateToEvent(event);
+
+  const isAllDay = event.allDay || event.allDayEvent;
+  const dateStr  = event.startDate ? event.startDate.slice(0, 10) : '';
+  const dows = ['日','月','火','水','木','金','土'];
+  let dateLabel = '';
+  if (dateStr) {
+    const d = new Date(dateStr + 'T00:00:00');
+    dateLabel = `${d.getFullYear()}年${d.getMonth()+1}月${d.getDate()}日 (${dows[d.getDay()]})`;
+  }
+  const timeLabel = isAllDay ? '終日'
+    : formatTime(event.startDate) + (event.endDate ? ' 〜 ' + formatTime(event.endDate) : '');
+
+  const rows = [
+    ['日付', esc(dateLabel)],
+    ['時間', esc(timeLabel)],
+  ];
+  if (event.place)       rows.push(['場所', esc(event.place)]);
+  if (event.description) rows.push(['詳細', descToSafeHtml(event.description)]);
+
+  document.getElementById('event-modal-title').textContent = event.title || event.displayTitle || '';
+  document.getElementById('event-modal-body').innerHTML = `
+    <table class="event-modal-table">
+      ${rows.map(([k, v]) => `<tr><th>${k}</th><td>${v}</td></tr>`).join('')}
+    </table>`;
+  document.getElementById('event-modal-overlay').classList.add('open');
+
+  closeSearchDropdown();
+  document.getElementById('search-input').value = '';
+}
+
+function closeEventModal() {
+  document.getElementById('event-modal-overlay').classList.remove('open');
+}
+
+/**
+ * Google Calendar の description (HTML混在) を安全なHTMLに変換する
+ * <br> → 改行、<a href> → リンクテキスト、その他タグを除去
+ */
+function descToSafeHtml(raw) {
+  if (!raw) return '';
+  return raw
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<a[^>]*href="([^"]*)"[^>]*>([^<]*)<\/a>/gi, '$1')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;')
+    .replace(/\n/g, '<br>');
 }
