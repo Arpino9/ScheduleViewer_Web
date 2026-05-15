@@ -30,8 +30,15 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('event-modal-overlay').addEventListener('click', e => {
     if (e.target === document.getElementById('event-modal-overlay')) closeEventModal();
   });
+  document.getElementById('box-attach-overlay').addEventListener('click', e => {
+    if (e.target === document.getElementById('box-attach-overlay')) hideBoxAttachModal();
+  });
+  document.getElementById('pane-schedule').addEventListener('click', e => {
+    const btn = e.target.closest('.box-attach-btn');
+    if (btn) openBoxAttachModal(btn.dataset.eventId, btn.dataset.eventTitle);
+  });
   document.addEventListener('keydown', e => {
-    if (e.key === 'Escape') closeEventModal();
+    if (e.key === 'Escape') { closeEventModal(); hideBoxAttachModal(); }
   });
 
   initSearch();
@@ -188,9 +195,18 @@ async function fetchWeather(dateStr) {
   }
 }
 
+// ===== サイドバートグル (モバイル用) =====
+function toggleSidebar() {
+  document.getElementById('sidebar').classList.toggle('open');
+  document.getElementById('sidebar-overlay').classList.toggle('open');
+}
+function closeSidebar() {
+  document.getElementById('sidebar').classList.remove('open');
+  document.getElementById('sidebar-overlay').classList.remove('open');
+}
+
 // ===== 日付選択 =====
 function selectDate(dateStr, cell) {
-  // 選択解除
   document.querySelectorAll('.day-cell.selected').forEach(el => el.classList.remove('selected'));
   cell.classList.add('selected');
 
@@ -200,6 +216,7 @@ function selectDate(dateStr, cell) {
   document.getElementById('detail-date').textContent =
     `${d.getFullYear()}年${d.getMonth()+1}月${d.getDate()}日 (${dows[d.getDay()]})`;
 
+  closeSidebar();
   fetchWeather(dateStr);
   loadTab(state.activeTab);
 }
@@ -363,12 +380,16 @@ function renderEventCard(e) {
   const start = (!e.allDay && !e.allDayEvent && e.startDate) ? formatTime(e.startDate) : '';
   const end   = (!e.allDay && !e.allDayEvent && e.endDate)   ? formatTime(e.endDate)   : '';
   const time  = start ? `${start}${end ? ' ～ ' + end : ''}` : '終日';
+  const attachBtn = e.eventId
+    ? `<button class="box-attach-btn" data-event-id="${esc(e.eventId)}" data-event-title="${esc(e.title || e.displayTitle || '')}">📎 Box添付</button>`
+    : '';
   return `
     <div class="event-card ${cls}">
       <div class="event-time">${esc(time)}</div>
       <div class="event-title">${esc(e.title || e.displayTitle || '')}</div>
       ${e.place ? `<div class="event-place">📍 ${esc(e.place)}</div>` : ''}
       ${e.description ? `<div class="event-desc">${descToSafeHtml(e.description)}</div>` : ''}
+      ${attachBtn}
     </div>`;
 }
 
@@ -720,8 +741,8 @@ async function selectAnimeRow(row, idx) {
   const calTitle = event.title || '';
   const part = getPart(calTitle);
   const normalizedTitle = calTitle.replace(/_/g, ' ').replace(/　/g, ' ');  // _・全角スペース→半角スペースで正規化
-  const searchWord  = normalizedTitle.split(' ')[0];             // Annict 検索キー (最初の単語)
   const matchTitle  = getAnimeMatchTitle(normalizedTitle);        // Annict 完全一致タイトル
+  const searchWord  = matchTitle;                                  // Annict 検索キー (シリーズタイトル)
 
   // まずカレンダー情報だけ表示
   renderAnimeDetail(detail, null, calTitle, desc, null, '', part);
@@ -734,11 +755,15 @@ async function selectAnimeRow(row, idx) {
   ]);
 
   // Annictの結果からタイトルを探す (全角スペース正規化後に比較)
-  // 完全一致 → Annict タイトルが matchTitle の前方一致 (例: "VRAINS" で "VRAINS Ai編" にマッチ)
+  // 1. 完全一致
+  // 2. matchTitle が Annict タイトルで始まる (例: matchTitle "VRAINS Ai編" → Annict "VRAINS")
+  // 3. Annict タイトルが matchTitle で始まる (例: matchTitle "キングダム" → Annict "キングダム 第5シリーズ")
+  //    → シリーズが複数ある場合は最新（末尾）を優先
   const normStr = s => s.replace(/　/g, ' ');
   const a = animes ? (
     animes.find(x => normStr(x.title) === matchTitle) ||
     animes.find(x => matchTitle.startsWith(normStr(x.title))) ||
+    animes.findLast(x => normStr(x.title).startsWith(matchTitle + ' ')) ||
     null
   ) : null;
   const thumbnail = (thumbData && thumbData.url) ? thumbData.url
@@ -1128,6 +1153,53 @@ function openEventModal(event) {
 
 function closeEventModal() {
   document.getElementById('event-modal-overlay').classList.remove('open');
+}
+
+// ===== Box添付モーダル =====
+
+let _boxAttachEventId = null;
+
+function openBoxAttachModal(eventId, eventTitle) {
+  _boxAttachEventId = eventId;
+  document.getElementById('box-attach-event-title').textContent = eventTitle;
+  document.getElementById('box-attach-url').value = '';
+  document.getElementById('box-attach-title').value = '';
+  document.getElementById('box-attach-overlay').classList.add('open');
+}
+
+function hideBoxAttachModal() {
+  document.getElementById('box-attach-overlay').classList.remove('open');
+  _boxAttachEventId = null;
+}
+
+async function submitBoxAttach(e) {
+  e.preventDefault();
+  if (!_boxAttachEventId) return;
+  const btn = document.getElementById('box-attach-submit-btn');
+  btn.disabled = true;
+  btn.textContent = '添付中...';
+  try {
+    const res = await fetch(`/api/calendar/events/${encodeURIComponent(_boxAttachEventId)}/attachments`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        fileUrl:   document.getElementById('box-attach-url').value,
+        fileTitle: document.getElementById('box-attach-title').value
+      })
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    hideBoxAttachModal();
+    if (state.selectedDate) {
+      const pane = document.getElementById('pane-schedule');
+      delete state.cache[state.selectedDate + '#schedule'];
+      loadSchedule(state.selectedDate, pane);
+    }
+  } catch (err) {
+    alert('添付に失敗しました: ' + err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '添付する';
+  }
 }
 
 /**
