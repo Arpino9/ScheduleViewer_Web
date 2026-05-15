@@ -79,6 +79,20 @@ public class CalendarController {
         return calendarService.findByAddress(address);
     }
 
+    /** キーワード検索 (タイトル・場所・説明の部分一致、最大10件) */
+    @GetMapping("/search")
+    public List<CalendarEventsEntity> search(@RequestParam String q) {
+        return calendarService.search(q);
+    }
+
+    /** イベントに外部URL添付ファイル (Box等) を追加する */
+    @PostMapping("/events/{eventId}/attachments")
+    public void attachFile(@PathVariable String eventId, @RequestBody AttachRequest req) throws Exception {
+        calendarService.attachBoxFile(eventId, req.fileUrl(), req.fileTitle());
+    }
+
+    record AttachRequest(String fileUrl, String fileTitle) {}
+
     /** 説明で検索する */
     @GetMapping("/search/description")
     public List<CalendarEventsEntity> findByDescription(
