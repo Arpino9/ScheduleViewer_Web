@@ -1,8 +1,11 @@
 package com.scheduleviewer.infrastructure.google.calendar;
 
+import com.google.api.client.util.DateTime;
 import com.google.api.services.calendar.Calendar;
 import com.google.api.services.calendar.CalendarScopes;
 import com.google.api.services.calendar.model.Event;
+import com.google.api.services.calendar.model.EventAttachment;
+import com.google.api.services.calendar.model.EventDateTime;
 import com.google.api.services.calendar.model.Events;
 import com.scheduleviewer.domain.entity.AttachmentEntity;
 import com.scheduleviewer.domain.entity.CalendarEventsEntity;
@@ -29,13 +32,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class CalendarService {
 
     private static final Logger log = LoggerFactory.getLogger(CalendarService.class);
-    private static final List<String> SCOPES = List.of(CalendarScopes.CALENDAR_READONLY);
+    private static final List<String> SCOPES = List.of(CalendarScopes.CALENDAR); // 読み書き両方必要
 
     private final GoogleAuthService authService;
     private final AppProperties props;
 
     private final List<CalendarEventsEntity> calendarEvents = new ArrayList<>();
-    private final List<AttachmentEntity> attachments = new ArrayList<>();
     private final AtomicBoolean loading = new AtomicBoolean(false);
 
     public CalendarService(GoogleAuthService authService, AppProperties props) {
@@ -130,31 +132,37 @@ public class CalendarService {
         var start = event.getStart();
         var end   = event.getEnd();
 
+        CalendarEventsEntity entity;
+
         // 全日イベント (dateのみ、dateTimeなし)
         if (start.getDateTime() == null || isAllDayTime(start.getDateTime())) {
             LocalDateTime startDt = parseDate(start.getDate() != null ? start.getDate().toString() : null);
             LocalDateTime endDt   = parseDate(end.getDate()   != null ? end.getDate().toString()   : null);
-            calendarEvents.add(new CalendarEventsEntity(
+            entity = new CalendarEventsEntity(
                     event.getSummary(), startDt, endDt,
-                    event.getDescription() != null ? event.getDescription() : ""));
-            return;
+                    event.getDescription() != null ? event.getDescription() : "");
+        } else {
+            if (event.getSummary() == null) return;
+
+            LocalDateTime startDt = toLocalDateTime(start.getDateTime().getValue());
+            LocalDateTime endDt   = toLocalDateTime(end.getDateTime().getValue());
+            entity = new CalendarEventsEntity(
+                    event.getSummary(), startDt, endDt,
+                    event.getLocation() != null ? event.getLocation() : "",
+                    event.getDescription() != null ? event.getDescription() : "");
         }
 
-        if (event.getSummary() == null) return;
-
-        LocalDateTime startDt = toLocalDateTime(start.getDateTime().getValue());
-        LocalDateTime endDt   = toLocalDateTime(end.getDateTime().getValue());
-
-        calendarEvents.add(new CalendarEventsEntity(
-                event.getSummary(), startDt, endDt,
-                event.getLocation() != null ? event.getLocation() : "",
-                event.getDescription() != null ? event.getDescription() : ""));
+        entity.setEventId(event.getId());
 
         // 添付ファイル
         if (event.getAttachments() != null) {
-            event.getAttachments().forEach(att ->
-                    attachments.add(new AttachmentEntity(startDt, att.getTitle(), att.getFileUrl(), att.getMimeType())));
+            var atts = event.getAttachments().stream()
+                    .map(att -> new AttachmentEntity(entity.getStartDate(), att.getTitle(), att.getFileUrl(), att.getMimeType()))
+                    .toList();
+            entity.setAttachments(atts);
         }
+
+        calendarEvents.add(entity);
     }
 
     private boolean isAllDayTime(com.google.api.client.util.DateTime dt) {
@@ -177,14 +185,24 @@ public class CalendarService {
     /** 日付で検索 */
     public List<CalendarEventsEntity> findByDate(LocalDate date) {
         return calendarEvents.stream()
-                .filter(e -> e.getStartDate().toLocalDate().equals(date))
+                .filter(e -> {
+                    LocalDate start = e.getStartDate().toLocalDate();
+                    LocalDate end   = e.getEndDate().toLocalDate();
+                    // 単日イベント (timed含む) はstart==date、複数日全日イベントは start<=date<end
+                    return start.equals(date) || (!start.isAfter(date) && end.isAfter(date));
+                })
                 .toList();
     }
 
     /** 日付でアニメイベント（【視聴先】を含む全日イベント）を検索 */
     public List<CalendarEventsEntity> findAnimeByDate(LocalDate date) {
         return calendarEvents.stream()
-                .filter(e -> e.isProgram() && e.getStartDate().toLocalDate().equals(date))
+                .filter(e -> {
+                    if (!e.isProgram()) return false;
+                    LocalDate start = e.getStartDate().toLocalDate();
+                    LocalDate end   = e.getEndDate().toLocalDate();
+                    return start.equals(date) || (!start.isAfter(date) && end.isAfter(date));
+                })
                 .toList();
     }
 
@@ -251,6 +269,85 @@ public class CalendarService {
                 .filter(e -> e.getDescription() != null && e.getDescription().contains(description) &&
                              !e.getStartDate().toLocalDate().isBefore(startDate) &&
                              !e.getEndDate().toLocalDate().isAfter(endDate))
+                .toList();
+    }
+
+    /**
+     * アニメ視聴記録を Google Calendar に全日イベントとして登録する
+     * タイトル形式: "{seriesTitle} 第{episode}話"
+     * 説明形式: "\n【サブタイトル】\n...\n\n【視聴先】\n...\n\n【概要】\n..."
+     */
+    public void createAnimeEvent(LocalDate date, String seriesTitle, int episode,
+                                  String subtitle, String service, String summary) throws Exception {
+        var credential = authService.authorize(SCOPES, "token_Calendar");
+        var calService = new Calendar.Builder(
+                authService.newTransport(),
+                authService.getJsonFactory(),
+                credential)
+                .setApplicationName(authService.getApplicationName())
+                .build();
+
+        String eventTitle = seriesTitle + " 第" + episode + "話";
+        String desc = "\n【サブタイトル】\n" + subtitle
+                    + "\n\n【視聴先】\n" + service
+                    + "\n\n【概要】\n" + summary;
+
+        var event = new Event()
+                .setSummary(eventTitle)
+                .setDescription(desc)
+                .setColorId("4") // Flamingo
+                .setStart(new EventDateTime().setDate(new DateTime(date.toString())))
+                .setEnd(new EventDateTime().setDate(new DateTime(date.plusDays(1).toString())));
+
+        String calendarId = props.getGoogle().getCalendarId();
+        calService.events().insert(calendarId, event).execute();
+        log.info("カレンダーにアニメイベント登録: {} on {}", eventTitle, date);
+
+        // インメモリキャッシュを更新
+        Thread.ofVirtual().start(() -> {
+            try { load(); } catch (Exception e) { log.error("Calendar reload after insert failed", e); }
+        });
+    }
+
+    /**
+     * 指定イベントに外部URL添付ファイルを追加する (Box等)
+     */
+    public void attachBoxFile(String eventId, String fileUrl, String fileTitle) throws Exception {
+        var credential = authService.authorize(SCOPES, "token_Calendar");
+        var calService = new Calendar.Builder(
+                authService.newTransport(),
+                authService.getJsonFactory(),
+                credential)
+                .setApplicationName(authService.getApplicationName())
+                .build();
+
+        String calendarId = props.getGoogle().getCalendarId();
+        Event event = calService.events().get(calendarId, eventId).execute();
+
+        List<EventAttachment> attachments = event.getAttachments() != null
+                ? new ArrayList<>(event.getAttachments())
+                : new ArrayList<>();
+        attachments.add(new EventAttachment().setFileUrl(fileUrl).setTitle(fileTitle));
+        event.setAttachments(attachments);
+
+        calService.events().update(calendarId, eventId, event)
+                .setSupportsAttachments(true)
+                .execute();
+        log.info("添付ファイル追加: eventId={}, title={}", eventId, fileTitle);
+
+        Thread.ofVirtual().start(() -> {
+            try { load(); } catch (Exception e) { log.error("Calendar reload after attach failed", e); }
+        });
+    }
+
+    /** タイトル・場所・説明でキーワード検索 (最大10件) */
+    public List<CalendarEventsEntity> search(String q) {
+        String lower = q.toLowerCase();
+        return calendarEvents.stream()
+                .filter(e -> (e.getTitle() != null && e.getTitle().toLowerCase().contains(lower)) ||
+                             (e.getPlace() != null && e.getPlace().toLowerCase().contains(lower)) ||
+                             (e.getDescription() != null && e.getDescription().toLowerCase().contains(lower)))
+                .limit(10)
                 .toList();
     }
 }
