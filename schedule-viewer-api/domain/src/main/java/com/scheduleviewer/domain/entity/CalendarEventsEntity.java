@@ -1,6 +1,8 @@
 package com.scheduleviewer.domain.entity;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Entity - Googleカレンダーのイベント
@@ -11,8 +13,10 @@ public final class CalendarEventsEntity {
             new CalendarEventsEntity("", LocalDateTime.MIN, LocalDateTime.MIN, "", "");
 
     private final boolean isAllDay;
+    private String eventId;
     private final String title;
     private String displayTitle;
+    private List<AttachmentEntity> attachments = new ArrayList<>();
     private final String place;
     private final LocalDateTime startDate;
     private final LocalDateTime progressingStartDate;
@@ -96,6 +100,14 @@ public final class CalendarEventsEntity {
 
     /** 説明 */
     public String getDescription() { return description; }
+
+    /** Google Calendar イベントID */
+    public String getEventId() { return eventId; }
+    public void setEventId(String eventId) { this.eventId = eventId; }
+
+    /** 添付ファイル */
+    public List<AttachmentEntity> getAttachments() { return attachments; }
+    public void setAttachments(List<AttachmentEntity> attachments) { this.attachments = attachments; }
 
     /**
      * 全日イベントか
