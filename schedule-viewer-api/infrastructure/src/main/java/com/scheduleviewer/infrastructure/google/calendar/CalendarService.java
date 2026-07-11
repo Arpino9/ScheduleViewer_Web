@@ -44,7 +44,7 @@ public class CalendarService {
         this.props = props;
     }
 
-    /** 起動時に非同期でカレンダーを読み込む (トークンが存在する場合のみ) */
+    /** 起動時に非同期でカレンダーを読み込む (トークンが存在する場合のみ)。失敗時は最大3回リトライする */
     @PostConstruct
     public void initializeAsync() {
         if (!authService.hasToken("token_Calendar")) {
@@ -52,10 +52,20 @@ public class CalendarService {
             return;
         }
         Thread.ofVirtual().start(() -> {
-            try {
-                load();
-            } catch (Exception e) {
-                log.error("カレンダーの読み込みに失敗しました", e);
+            long[] retryDelaysMs = {30_000L, 60_000L, 120_000L};
+            for (int attempt = 0; attempt <= retryDelaysMs.length; attempt++) {
+                try {
+                    load();
+                    return;
+                } catch (Exception e) {
+                    if (attempt < retryDelaysMs.length) {
+                        log.warn("カレンダーの読み込みに失敗しました (試行 {}/{}), {}秒後にリトライします: {}",
+                                attempt + 1, retryDelaysMs.length + 1, retryDelaysMs[attempt] / 1000, e.getMessage());
+                        try { Thread.sleep(retryDelaysMs[attempt]); } catch (InterruptedException ie) { return; }
+                    } else {
+                        log.error("カレンダーの読み込みに全試行失敗しました", e);
+                    }
+                }
             }
         });
     }
@@ -109,23 +119,19 @@ public class CalendarService {
                 .build();
     }
 
-    /** ページネーションを使って全イベントを取得する */
+    /** ページネーションを使って全イベントを取得する (過去10年〜未来3年) */
     private List<Event> fetchAllEvents(Calendar service, String calendarId) throws Exception {
         long nowMs = System.currentTimeMillis();
     	var request = service.events().list(calendarId);
-        request.setMaxResults(2500);
-    	// 繰り返しイベントを個別インスタンスに展開する
-    	request.setSingleEvents(true);
-    	request.setOrderBy("startTime");
-    	request.setTimeMin(new DateTime(nowMs - 3650L * 24 * 60 * 60 * 1000)); // 過去10年
-		request.setTimeMax(new DateTime(nowMs + 1095L * 24 * 60 * 60 * 1000)); // 未来3年
-    	request.setShowDeleted(false);
-    	// 10年前から取得
-	    long tenYearsAgoMs = java.time.Instant.now()
-	            .minus(java.time.Duration.ofDays(365 * 10))
-	            .toEpochMilli();
-	    request.setTimeMin(new DateTime(tenYearsAgoMs));    	
-        request.setPageToken(null);
+        long tenYearsAgoMs = java.time.Instant.now()
+                .minus(java.time.Duration.ofDays(365 * 10))
+                .toEpochMilli();
+        long threeYearsLaterMs = java.time.Instant.now()
+                .plus(java.time.Duration.ofDays(365 * 3))
+                .toEpochMilli();
+
+        var request = service.events().list(calendarId);
+    	request.setMaxResults(2500);
 
         List<Event> result = new ArrayList<>();
         do {
@@ -135,15 +141,7 @@ public class CalendarService {
             }
             request.setPageToken(events.getNextPageToken());
         } while (request.getPageToken() != null);
-
-        //result.sort((a, b) -> {
-        //    var sa = a.getStart().getDateTime();
-        //    var sb = b.getStart().getDateTime();
-        //    // null (全日イベント) は Long.MIN_VALUE として先頭に並べる
-        //    long va = (sa != null) ? sa.getValue() : Long.MIN_VALUE;
-        //    long vb = (sb != null) ? sb.getValue() : Long.MIN_VALUE;
-        //    return Long.compare(va, vb);
-        //});
+    	
         return result;
     }
 
