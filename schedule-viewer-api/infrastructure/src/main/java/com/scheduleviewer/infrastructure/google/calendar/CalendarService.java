@@ -16,7 +16,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
-import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
@@ -37,7 +36,7 @@ public class CalendarService {
     private final GoogleAuthService authService;
     private final AppProperties props;
 
-    private final List<CalendarEventsEntity> calendarEvents = new ArrayList<>();
+    private volatile List<CalendarEventsEntity> calendarEvents = List.of();
     private final AtomicBoolean loading = new AtomicBoolean(false);
 
     public CalendarService(GoogleAuthService authService, AppProperties props) {
@@ -79,22 +78,17 @@ public class CalendarService {
     public synchronized void load() throws Exception {
         loading.set(true);
         try {
-            calendarEvents.clear();
-
             var credential = authService.authorize(SCOPES, "token_Calendar");
-            var service = new Calendar.Builder(
-                    authService.newTransport(),
-                    authService.getJsonFactory(),
-                    credential)
-                    .setApplicationName(authService.getApplicationName())
-                    .build();
+            var service = buildCalendarService(credential);
 
             String calendarId = props.getGoogle().getCalendarId();
             List<Event> allEvents = fetchAllEvents(service, calendarId);
 
+            List<CalendarEventsEntity> temp = new ArrayList<>(allEvents.size());
             for (Event event : allEvents) {
-                mapEvent(event);
+                mapEventInto(event, temp);
             }
+            calendarEvents = temp;
 
             log.info("カレンダー読み込み完了: {}件", calendarEvents.size());
         } finally {
@@ -102,10 +96,35 @@ public class CalendarService {
         }
     }
 
+    private Calendar buildCalendarService(com.google.api.client.auth.oauth2.Credential credential) throws Exception {
+        return new Calendar.Builder(
+                authService.newTransport(),
+                authService.getJsonFactory(),
+                httpRequest -> {
+                    credential.initialize(httpRequest);
+                    httpRequest.setConnectTimeout(30_000);
+                    httpRequest.setReadTimeout(120_000);
+                })
+                .setApplicationName(authService.getApplicationName())
+                .build();
+    }
+
     /** ページネーションを使って全イベントを取得する */
     private List<Event> fetchAllEvents(Calendar service, String calendarId) throws Exception {
-        var request = service.events().list(calendarId);
+        long nowMs = System.currentTimeMillis();
+    	var request = service.events().list(calendarId);
         request.setMaxResults(2500);
+    	// 繰り返しイベントを個別インスタンスに展開する
+    	request.setSingleEvents(true);
+    	request.setOrderBy("startTime");
+    	request.setTimeMin(new DateTime(nowMs - 3650L * 24 * 60 * 60 * 1000)); // 過去10年
+		request.setTimeMax(new DateTime(nowMs + 1095L * 24 * 60 * 60 * 1000)); // 未来3年
+    	request.setShowDeleted(false);
+    	// 10年前から取得
+	    long tenYearsAgoMs = java.time.Instant.now()
+	            .minus(java.time.Duration.ofDays(365 * 10))
+	            .toEpochMilli();
+	    request.setTimeMin(new DateTime(tenYearsAgoMs));    	
         request.setPageToken(null);
 
         List<Event> result = new ArrayList<>();
@@ -117,25 +136,25 @@ public class CalendarService {
             request.setPageToken(events.getNextPageToken());
         } while (request.getPageToken() != null);
 
-        result.sort((a, b) -> {
-            var sa = a.getStart().getDateTime();
-            var sb = b.getStart().getDateTime();
-            // null (全日イベント) は Long.MIN_VALUE として先頭に並べる
-            long va = (sa != null) ? sa.getValue() : Long.MIN_VALUE;
-            long vb = (sb != null) ? sb.getValue() : Long.MIN_VALUE;
-            return Long.compare(va, vb);
-        });
+        //result.sort((a, b) -> {
+        //    var sa = a.getStart().getDateTime();
+        //    var sb = b.getStart().getDateTime();
+        //    // null (全日イベント) は Long.MIN_VALUE として先頭に並べる
+        //    long va = (sa != null) ? sa.getValue() : Long.MIN_VALUE;
+        //    long vb = (sb != null) ? sb.getValue() : Long.MIN_VALUE;
+        //    return Long.compare(va, vb);
+        //});
         return result;
     }
 
-    private void mapEvent(Event event) {
+    private void mapEventInto(Event event, List<CalendarEventsEntity> target) {
         var start = event.getStart();
         var end   = event.getEnd();
 
         CalendarEventsEntity entity;
 
-        // 全日イベント (dateのみ、dateTimeなし)
-        if (start.getDateTime() == null || isAllDayTime(start.getDateTime())) {
+        // 全日イベント: singleEvents=true の場合、全日イベントは必ず getDateTime()==null
+        if (start.getDateTime() == null) {
             LocalDateTime startDt = parseDate(start.getDate() != null ? start.getDate().toString() : null);
             LocalDateTime endDt   = parseDate(end.getDate()   != null ? end.getDate().toString()   : null);
             entity = new CalendarEventsEntity(
@@ -162,12 +181,7 @@ public class CalendarService {
             entity.setAttachments(atts);
         }
 
-        calendarEvents.add(entity);
-    }
-
-    private boolean isAllDayTime(com.google.api.client.util.DateTime dt) {
-        var ldt = toLocalDateTime(dt.getValue());
-        return ldt.getHour() == 0 && ldt.getMinute() == 0 && ldt.getSecond() == 0;
+        target.add(entity);
     }
 
     private LocalDateTime toLocalDateTime(long epochMillis) {
@@ -280,12 +294,7 @@ public class CalendarService {
     public void createAnimeEvent(LocalDate date, String seriesTitle, int episode,
                                   String subtitle, String service, String summary) throws Exception {
         var credential = authService.authorize(SCOPES, "token_Calendar");
-        var calService = new Calendar.Builder(
-                authService.newTransport(),
-                authService.getJsonFactory(),
-                credential)
-                .setApplicationName(authService.getApplicationName())
-                .build();
+        var calService = buildCalendarService(credential);
 
         String eventTitle = seriesTitle + " 第" + episode + "話";
         String desc = "\n【サブタイトル】\n" + subtitle
@@ -312,14 +321,44 @@ public class CalendarService {
     /**
      * 指定イベントに外部URL添付ファイルを追加する (Box等)
      */
+    public void addPhotoUrl(String eventId, String photoUrl) throws Exception {
+        var credential = authService.authorize(SCOPES, "token_Calendar");
+        var calService = buildCalendarService(credential);
+
+        String calendarId = props.getGoogle().getCalendarId();
+        Event event = calService.events().get(calendarId, eventId).execute();
+
+        String desc = event.getDescription() != null ? event.getDescription() : "";
+        String newDesc;
+
+        int photoIdx = desc.indexOf("【写真】");
+        if (photoIdx >= 0) {
+            int nextSection = desc.indexOf("\n【", photoIdx + 5);
+            if (nextSection < 0) {
+                newDesc = desc.stripTrailing() + "\n" + photoUrl;
+            } else {
+                newDesc = desc.substring(0, nextSection).stripTrailing() + "\n" + photoUrl
+                        + desc.substring(nextSection);
+            }
+        } else {
+            String photoSection = "【写真】\n" + photoUrl;
+            newDesc = desc.isEmpty() ? photoSection : photoSection + "\n\n" + desc;
+        }
+
+        event.setDescription(newDesc);
+        calService.events().update(calendarId, eventId, event)
+                .setSupportsAttachments(true)
+                .execute();
+        log.info("写真URL追加: eventId={}, url={}", eventId, photoUrl);
+
+        Thread.ofVirtual().start(() -> {
+            try { load(); } catch (Exception e) { log.error("Calendar reload after photo attach failed", e); }
+        });
+    }
+
     public void attachBoxFile(String eventId, String fileUrl, String fileTitle) throws Exception {
         var credential = authService.authorize(SCOPES, "token_Calendar");
-        var calService = new Calendar.Builder(
-                authService.newTransport(),
-                authService.getJsonFactory(),
-                credential)
-                .setApplicationName(authService.getApplicationName())
-                .build();
+        var calService = buildCalendarService(credential);
 
         String calendarId = props.getGoogle().getCalendarId();
         Event event = calService.events().get(calendarId, eventId).execute();
