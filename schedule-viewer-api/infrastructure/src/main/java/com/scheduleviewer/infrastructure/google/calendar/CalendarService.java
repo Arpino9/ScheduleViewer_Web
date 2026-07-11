@@ -20,6 +20,7 @@ import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -71,6 +72,12 @@ public class CalendarService {
         return loading.get();
     }
 
+	/** キャッシュ済みイベント件数を返す (データ取得確認用) */
+    public int getEventCount() {
+        return calendarEvents.size();
+    }
+	
+	
     /**
      * Google Calendar API からイベントを全件取得してキャッシュする
      */
