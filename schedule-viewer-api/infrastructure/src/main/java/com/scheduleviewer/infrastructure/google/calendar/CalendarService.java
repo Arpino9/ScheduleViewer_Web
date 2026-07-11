@@ -1,6 +1,5 @@
 package com.scheduleviewer.infrastructure.google.calendar;
 
-import com.google.api.client.util.DateTime;
 import com.google.api.services.calendar.Calendar;
 import com.google.api.services.calendar.CalendarScopes;
 import com.google.api.services.calendar.model.Event;
@@ -111,20 +110,12 @@ public class CalendarService {
 
     /** ページネーションを使って全イベントを取得する */
     private List<Event> fetchAllEvents(Calendar service, String calendarId) throws Exception {
-        long nowMs = System.currentTimeMillis();
     	var request = service.events().list(calendarId);
         request.setMaxResults(2500);
-    	// 繰り返しイベントを個別インスタンスに展開する
-    	request.setSingleEvents(true);
-    	request.setOrderBy("startTime");
-    	request.setTimeMin(new DateTime(nowMs - 3650L * 24 * 60 * 60 * 1000)); // 過去10年
-		request.setTimeMax(new DateTime(nowMs + 1095L * 24 * 60 * 60 * 1000)); // 未来3年
-    	request.setShowDeleted(false);
-    	// 10年前から取得
-	    long tenYearsAgoMs = java.time.Instant.now()
-	            .minus(java.time.Duration.ofDays(365 * 10))
-	            .toEpochMilli();
-	    request.setTimeMin(new DateTime(tenYearsAgoMs));    	
+    	// 繰り返しイベントを個別インスタンスに展開する (orderBy=startTime に必須)
+        request.setSingleEvents(true);
+        request.setOrderBy("startTime");
+        request.setShowDeleted(false);
         request.setPageToken(null);
 
         List<Event> result = new ArrayList<>();
@@ -136,14 +127,6 @@ public class CalendarService {
             request.setPageToken(events.getNextPageToken());
         } while (request.getPageToken() != null);
 
-        //result.sort((a, b) -> {
-        //    var sa = a.getStart().getDateTime();
-        //    var sb = b.getStart().getDateTime();
-        //    // null (全日イベント) は Long.MIN_VALUE として先頭に並べる
-        //    long va = (sa != null) ? sa.getValue() : Long.MIN_VALUE;
-        //    long vb = (sb != null) ? sb.getValue() : Long.MIN_VALUE;
-        //    return Long.compare(va, vb);
-        //});
         return result;
     }
 
@@ -305,8 +288,8 @@ public class CalendarService {
                 .setSummary(eventTitle)
                 .setDescription(desc)
                 .setColorId("4") // Flamingo
-                .setStart(new EventDateTime().setDate(new DateTime(date.toString())))
-                .setEnd(new EventDateTime().setDate(new DateTime(date.plusDays(1).toString())));
+                .setStart(new EventDateTime().setDate(new com.google.api.client.util.DateTime(date.toString())))
+                .setEnd(new EventDateTime().setDate(new com.google.api.client.util.DateTime(date.plusDays(1).toString())));
 
         String calendarId = props.getGoogle().getCalendarId();
         calService.events().insert(calendarId, event).execute();
