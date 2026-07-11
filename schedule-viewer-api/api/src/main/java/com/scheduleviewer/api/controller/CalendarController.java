@@ -23,9 +23,11 @@ public class CalendarController {
 
     /** 読込状態を返す */
     @GetMapping("/status")
-    public boolean isLoading() {
-        return calendarService.isLoading();
-    }
+    public Map<String, Object> status() {
+    return Map.of(
+        "loading", calendarService.isLoading(),
+        "eventCount", calendarService.getEventCount()
+    );
 
     /** カレンダーを再読み込みする */
     @PostMapping("/reload")
