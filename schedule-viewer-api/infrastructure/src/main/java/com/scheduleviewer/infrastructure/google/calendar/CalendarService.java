@@ -1,5 +1,6 @@
 package com.scheduleviewer.infrastructure.google.calendar;
 
+import com.google.api.client.util.DateTime;
 import com.google.api.services.calendar.Calendar;
 import com.google.api.services.calendar.CalendarScopes;
 import com.google.api.services.calendar.model.Event;
@@ -20,7 +21,6 @@ import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -44,21 +44,31 @@ public class CalendarService {
         this.props = props;
     }
 
-    /** 起動時に非同期でカレンダーを読み込む (トークンが存在する場合のみ) */
-    @PostConstruct
-    public void initializeAsync() {
-        if (!authService.hasToken("token_Calendar")) {
-            log.info("Google Calendar トークンが未設定のため起動時読み込みをスキップします");
-            return;
-        }
-        Thread.ofVirtual().start(() -> {
-            try {
-                load();
-            } catch (Exception e) {
-                log.error("カレンダーの読み込みに失敗しました", e);
-            }
-        });
-    }
+    /** 起動時に非同期でカレンダーを読み込む (トークンが存在する場合のみ)。失敗時は最大3回リトライする */
+	@PostConstruct
+	public void initializeAsync() {
+	    if (!authService.hasToken("token_Calendar")) {
+	        log.info("Google Calendar トークンが未設定のため起動時読み込みをスキップします");
+	        return;
+	    }
+	    Thread.ofVirtual().start(() -> {
+	        long[] retryDelaysMs = {30_000L, 60_000L, 120_000L};
+	        for (int attempt = 0; attempt <= retryDelaysMs.length; attempt++) {
+	            try {
+	                load();
+	                return;
+	            } catch (Exception e) {
+	                if (attempt < retryDelaysMs.length) {
+	                    log.warn("カレンダーの読み込みに失敗しました (試行 {}/{}), {}秒後にリトライします: {}",
+	                            attempt + 1, retryDelaysMs.length + 1, retryDelaysMs[attempt] / 1000, e.getMessage());
+	                    try { Thread.sleep(retryDelaysMs[attempt]); } catch (InterruptedException ie) { return; }
+	                } else {
+	                    log.error("カレンダーの読み込みに全試行失敗しました", e);
+	                }
+	            }
+	        }
+	    });
+	}
 
     /** OAuth認証URLを取得する。認証完了後に自動でデータを読み込む。認証済みの場合は null を返す。 */
     public String getAuthUrl() throws Exception {
@@ -72,12 +82,6 @@ public class CalendarService {
         return loading.get();
     }
 
-	/** キャッシュ済みイベント件数を返す (データ取得確認用) */
-    public int getEventCount() {
-        return calendarEvents.size();
-    }
-	
-	
     /**
      * Google Calendar API からイベントを全件取得してキャッシュする
      */
@@ -117,12 +121,18 @@ public class CalendarService {
 
     /** ページネーションを使って全イベントを取得する */
     private List<Event> fetchAllEvents(Calendar service, String calendarId) throws Exception {
+        long nowMs = System.currentTimeMillis();
     	var request = service.events().list(calendarId);
         request.setMaxResults(2500);
-    	// 繰り返しイベントを個別インスタンスに展開する (orderBy=startTime に必須)
-        request.setSingleEvents(true);
-        request.setOrderBy("startTime");
-        request.setShowDeleted(false);
+    	// 繰り返しイベントを個別インスタンスに展開する
+    	request.setSingleEvents(true);
+    	request.setOrderBy("startTime");
+    	request.setShowDeleted(false);
+    	// 10年前から取得
+	    long tenYearsAgoMs = java.time.Instant.now()
+	            .minus(java.time.Duration.ofDays(365 * 10))
+	            .toEpochMilli();
+	    request.setTimeMin(new DateTime(tenYearsAgoMs));    	
         request.setPageToken(null);
 
         List<Event> result = new ArrayList<>();
@@ -134,6 +144,14 @@ public class CalendarService {
             request.setPageToken(events.getNextPageToken());
         } while (request.getPageToken() != null);
 
+        //result.sort((a, b) -> {
+        //    var sa = a.getStart().getDateTime();
+        //    var sb = b.getStart().getDateTime();
+        //    // null (全日イベント) は Long.MIN_VALUE として先頭に並べる
+        //    long va = (sa != null) ? sa.getValue() : Long.MIN_VALUE;
+        //    long vb = (sb != null) ? sb.getValue() : Long.MIN_VALUE;
+        //    return Long.compare(va, vb);
+        //});
         return result;
     }
 
@@ -295,8 +313,8 @@ public class CalendarService {
                 .setSummary(eventTitle)
                 .setDescription(desc)
                 .setColorId("4") // Flamingo
-                .setStart(new EventDateTime().setDate(new com.google.api.client.util.DateTime(date.toString())))
-                .setEnd(new EventDateTime().setDate(new com.google.api.client.util.DateTime(date.plusDays(1).toString())));
+                .setStart(new EventDateTime().setDate(new DateTime(date.toString())))
+                .setEnd(new EventDateTime().setDate(new DateTime(date.plusDays(1).toString())));
 
         String calendarId = props.getGoogle().getCalendarId();
         calService.events().insert(calendarId, event).execute();

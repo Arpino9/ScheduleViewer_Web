@@ -135,6 +135,32 @@
     </div>
   </div>
 
+  <!-- 写真URL添付モーダル -->
+  <div id="photo-attach-overlay">
+    <div id="photo-attach-modal">
+      <div id="photo-attach-header">
+        <span>&#128247; 写真URL追加</span>
+        <button onclick="hidePhotoAttachModal()">&#x2715;</button>
+      </div>
+      <div id="photo-attach-body">
+        <form id="photo-attach-form" onsubmit="submitPhotoAttach(event)">
+          <div class="reg-field">
+            <label>イベント</label>
+            <div id="photo-attach-event-title"></div>
+          </div>
+          <div class="reg-field">
+            <label>写真URL</label>
+            <input type="url" id="photo-attach-url" required placeholder="https://photos.google.com/...">
+          </div>
+          <div class="reg-actions">
+            <button type="submit" id="photo-attach-submit-btn">追加する</button>
+            <button type="button" onclick="hidePhotoAttachModal()">キャンセル</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
   <!-- Box添付モーダル -->
   <div id="box-attach-overlay">
     <div id="box-attach-modal">
@@ -181,7 +207,7 @@
     <button id="modal-close" onclick="closeModal()">&#x2715;</button>
     <img id="modal-img" src="" alt="写真">
   </div>
-  <script src="/js/app.js"></script>
+  <script src="/js/app.js?v=2"></script>
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js'));

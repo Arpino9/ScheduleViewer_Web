@@ -855,37 +855,66 @@ async function refreshAuthStatus() {
   renderAuthList(status);
 }
 
+async function requestAuthorization(path) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 20000);
+
+  try {
+    const res = await fetch(path, {
+      method: 'POST',
+      signal: controller.signal
+    });
+    if (!res.ok) throw new Error(`サーバーエラー (HTTP ${res.status})`);
+    return await res.json();
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      throw new Error('認証URLの取得がタイムアウトしました');
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 async function authorizeService(service, btn) {
   btn.disabled = true;
   btn.textContent = '取得中...';
 
-  const res = await fetch(`/api/auth/google/${service}`, { method: 'POST' });
-  const result = res.ok ? await res.json() : null;
-
-  if (result && result.url) {
-    authUrlCache[service] = result.url;
-  } else if (result && result.status === 'already_authorized') {
-    delete authUrlCache[service];
+  try {
+    const result = await requestAuthorization(`/api/auth/google/${service}`);
+    if (result.url) {
+      authUrlCache[service] = result.url;
+    } else if (result.status === 'already_authorized') {
+      delete authUrlCache[service];
+    }
+    await refreshAuthStatus();
+  } catch (err) {
+    console.error(`認証URL取得失敗: ${service}`, err);
+    alert(`認証URLの取得に失敗しました: ${err.message}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '認証する';
   }
-  await refreshAuthStatus();
 }
 
 async function authorizeAll(allBtn) {
   allBtn.disabled = true;
   allBtn.textContent = '取得中...';
 
-  const res = await fetch('/api/auth/google/all', { method: 'POST' });
-  const result = res.ok ? await res.json() : null;
-
-  if (result) {
+  try {
+    const result = await requestAuthorization('/api/auth/google/all');
     Object.entries(result).forEach(([svc, r]) => {
       if (r && r.url) authUrlCache[svc] = r.url;
       else delete authUrlCache[svc];
     });
+    await refreshAuthStatus();
+  } catch (err) {
+    console.error('一括認証URL取得失敗', err);
+    alert(`一括認証URLの取得に失敗しました: ${err.message}`);
+  } finally {
+    allBtn.disabled = false;
+    allBtn.textContent = '一括認証';
   }
-  allBtn.disabled = false;
-  allBtn.textContent = '一括認証';
-  await refreshAuthStatus();
 }
 
 // ===== 全再読み込み =====
